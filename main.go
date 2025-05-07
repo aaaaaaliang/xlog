@@ -2,7 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,13 +49,17 @@ type Logger interface {
 	Info(msg string)
 	Error(msg string)
 	WithFields(fields map[string]interface{}) Logger
+	WithField(key string, value interface{}) Logger
 	SetLevel(level Level)
+	SetOutput(w io.Writer)
 }
 
 type cilLogger struct {
 	name   string
 	fields map[string]interface{}
 	level  Level
+	output io.Writer
+	lock   sync.RWMutex
 }
 
 func New(name string) Logger {
@@ -59,18 +67,24 @@ func New(name string) Logger {
 		name:   name,
 		fields: make(map[string]interface{}),
 		level:  LevelDebug,
+		output: os.Stdout,
 	}
 }
 
 func (l *cilLogger) clone() *cilLogger {
-	newFields := make(map[string]interface{})
+	l.lock.RLock()
+	defer l.lock.RUnlock()
+
+	newFields := make(map[string]interface{}, len(l.fields))
 	for k, v := range l.fields {
 		newFields[k] = v
 	}
+
 	return &cilLogger{
 		name:   l.name,
 		fields: newFields,
 		level:  l.level,
+		output: l.output,
 	}
 }
 
@@ -82,12 +96,26 @@ func (l *cilLogger) WithFields(fields map[string]interface{}) Logger {
 	return clone
 }
 
+func (l *cilLogger) WithField(key string, value interface{}) Logger {
+	return l.WithFields(map[string]interface{}{key: value})
+}
+
 func (l *cilLogger) SetLevel(level Level) {
+	l.lock.Lock()
+	defer l.lock.Unlock()
 	l.level = level
 }
 
 func (l *cilLogger) shouldLog(level Level) bool {
+	l.lock.RLock()
+	defer l.lock.RUnlock()
 	return level >= l.level
+}
+
+func (l *cilLogger) SetOutput(w io.Writer) {
+	l.lock.Lock()
+	defer l.lock.Unlock()
+	l.output = w
 }
 
 func (l *cilLogger) formatLog(level Level, msg string) string {
@@ -97,9 +125,18 @@ func (l *cilLogger) formatLog(level Level, msg string) string {
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s[%s] [%s] [%s]", color, level.String(), timeStr, l.name))
-	for k, v := range l.fields {
-		sb.WriteString(fmt.Sprintf(" %s=%v", k, v))
+
+	// 🚀 对 key 排序
+	keys := make([]string, 0, len(l.fields))
+	for k := range l.fields {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
+
+	for _, k := range keys {
+		sb.WriteString(fmt.Sprintf(" %s=%v", k, l.fields[k]))
+	}
+
 	sb.WriteString(fmt.Sprintf(" | %s%s\n", msg, reset))
 	return sb.String()
 }
@@ -108,7 +145,13 @@ func (l *cilLogger) log(level Level, msg string) {
 	if !l.shouldLog(level) {
 		return
 	}
-	fmt.Print(l.formatLog(level, msg))
+
+	// 获取输出锁
+	l.lock.RLock()
+	output := l.output
+	l.lock.RUnlock()
+
+	_, _ = output.Write([]byte(l.formatLog(level, msg)))
 }
 
 func (l *cilLogger) Debug(msg string) {
@@ -124,22 +167,13 @@ func (l *cilLogger) Error(msg string) {
 }
 
 func main() {
-	log := New("OrderService")
-	log.SetLevel(LevelDebug)
+	log := New("UserService")
 
-	log.Debug("调试信息")
-	log.Info("服务启动成功")
+	for i := 0; i < 100; i++ {
+		go func(i int) {
+			log.WithField("user", i).Info("处理完毕")
+		}(i)
+	}
 
-	userLog := log.WithFields(map[string]interface{}{
-		"user_id": 42,
-		"ip":      "192.168.1.1",
-	})
-
-	userLog.Info("用户登录成功")
-	userLog.Error("数据库连接失败")
-
-	fmt.Println(LevelInfo)         // 会打印 INFO
-	fmt.Printf("%s\n", LevelError) // 会打印 ERROR
-	fmt.Printf("%d\n", LevelError) // 会打印 2（LevelError 的底层 int 值）
-
+	time.Sleep(time.Second)
 }

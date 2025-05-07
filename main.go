@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -89,19 +90,25 @@ func (l *cilLogger) shouldLog(level Level) bool {
 	return level >= l.level
 }
 
-func (l *cilLogger) log(level Level, msg string) {
-	if !l.shouldLog(level) {
-		return
-	}
+func (l *cilLogger) formatLog(level Level, msg string) string {
 	timeStr := time.Now().Format("2006-01-02 15:04:05")
 	color := level.Color()
 	reset := "\033[0m"
 
-	fmt.Printf("%s[%s] [%s] [%s]", color, level.String(), timeStr, l.name)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s[%s] [%s] [%s]", color, level.String(), timeStr, l.name))
 	for k, v := range l.fields {
-		fmt.Printf(" %s=%v", k, v)
+		sb.WriteString(fmt.Sprintf(" %s=%v", k, v))
 	}
-	fmt.Printf(" | %s%s\n", msg, reset)
+	sb.WriteString(fmt.Sprintf(" | %s%s\n", msg, reset))
+	return sb.String()
+}
+
+func (l *cilLogger) log(level Level, msg string) {
+	if !l.shouldLog(level) {
+		return
+	}
+	fmt.Print(l.formatLog(level, msg))
 }
 
 func (l *cilLogger) Debug(msg string) {
